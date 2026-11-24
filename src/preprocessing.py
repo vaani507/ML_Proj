@@ -152,8 +152,17 @@ def process_split(split):
     image_dir = RAW_DIR / split / "defect"
     mask_dir = RAW_DIR / split / "label"
 
+    if not image_dir.is_dir():
+        raise FileNotFoundError(f"Image directory not found: {image_dir}")
+    if not mask_dir.is_dir():
+        raise FileNotFoundError(f"Mask directory not found: {mask_dir}")
+
     images = find_images(image_dir)
     masks = find_images(mask_dir, is_label=True)
+    if not images and not masks:
+        raise ValueError(
+            f"No images or labels found in split {split!r}."
+        )
 
     print(f"\n{split.upper()}")
     print(f"Images found: {len(images)}")
@@ -175,13 +184,17 @@ def process_split(split):
             records.append(
                 preprocess_pair(images[key], masks[key], split)
             )
-        except Exception as error:
+        except (OSError, ValueError) as error:
             records.append({
                 "split": split,
                 "image": str(images[key]),
                 "mask": str(masks[key]),
                 "status": f"error: {error}",
             })
+
+    failed_pairs = sum(record.get("status") != "ok" for record in records)
+    if failed_pairs:
+        print(f"Pairs that failed preprocessing: {failed_pairs}")
 
     pairing_issues = [
         {"split": split, "issue": "image_without_label", "key": key, "path": str(images[key])}
@@ -197,6 +210,29 @@ def process_split(split):
     ).to_csv(REPORT_DIR / f"{split}_pairing_issues.csv", index=False)
 
     return records, pairing_issues
+
+
+def remove_stale_processed_files(records):
+    removed_count = 0
+    for split in SPLITS:
+        expected_names = {
+            f"{Path(record['image']).stem}.png"
+            for record in records
+            if record["split"] == split and record.get("status") == "ok"
+        }
+        for folder_name in ("images", "masks"):
+            output_dir = OUT_DIR / split / folder_name
+            if not output_dir.is_dir():
+                continue
+            for path in output_dir.iterdir():
+                if (
+                    path.is_file()
+                    and path.suffix.lower() in EXTENSIONS
+                    and path.name not in expected_names
+                ):
+                    path.unlink()
+                    removed_count += 1
+    return removed_count
 
 
 def main():
@@ -233,12 +269,24 @@ def main():
 
     print("\nPreprocessing finished.")
     print(f"Unmatched image/label files: {len(all_pairing_issues)}")
+    failed_pairs = [
+        record for record in all_records
+        if record.get("status") != "ok"
+    ]
+    print(f"Failed image/mask pairs: {len(failed_pairs)}")
     print(f"Empty binary masks: {len(empty_masks)}")
     print(f"Potential train/test original-image overlaps: {len(split_overlaps)}")
     if split_overlaps:
         print("Warning: related images occur across splits; see split_overlaps.csv")
     print(f"Report saved to: {report_path}")
     print(f"Processed dataset saved to: {OUT_DIR}")
+    if failed_pairs or all_pairing_issues:
+        raise RuntimeError(
+            "Preprocessing was incomplete; resolve the reported pairing or "
+            f"processing errors in {report_path} and rerun."
+        )
+    removed_count = remove_stale_processed_files(all_records)
+    print(f"Stale processed files removed: {removed_count}")
 
 
 if __name__ == "__main__":

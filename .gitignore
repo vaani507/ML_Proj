@@ -10,10 +10,16 @@ ENV/
 # Jupyter
 .ipynb_checkpoints/
 
+# Test and tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
 # Secrets and local settings
 .env
 .env.*
 !.env.example
+.streamlit/secrets.toml
 
 # Datasets and generated results
 data/
