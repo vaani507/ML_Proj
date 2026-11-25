@@ -10,6 +10,7 @@ from PIL import Image
 from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 
 from src.dataset import get_dataloaders
+from src.inference import model_checkpoint_path
 from src.models import ResNet18UNet
 from src.train import BoundaryAwareBCEDiceLoss, compute_detailed_metrics
 
@@ -196,6 +197,11 @@ def train_resnet_unet(
     best_path = checkpoint_prefix.with_name(
         checkpoint_prefix.name + suffix + "_best.pth"
     )
+    if best_path.resolve() == model_checkpoint_path("phase5_resnet18").resolve():
+        raise ValueError(
+            "Use a different output prefix. This path is reserved for the "
+            "evaluated Phase 5 checkpoint."
+        )
     last_path = checkpoint_prefix.with_name(
         checkpoint_prefix.name + suffix + "_last.pth"
     )

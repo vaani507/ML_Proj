@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import hashlib
 from io import BytesIO
 from pathlib import Path
 import time
@@ -16,6 +17,9 @@ from src.models import ResNet18UNet, UNet
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MODEL_INPUT_SIZE = (224, 224)
 DEFAULT_THRESHOLD = 0.165
+PHASE5_CHECKPOINT_SHA256 = (
+    "518a4de1485a8828f6bbeea89da19bafe5db86ae65054e5dbc6cadbbab4a8cd8"
+)
 CUSTOM_UNET_THRESHOLD = 0.525
 MAX_IMAGE_PIXELS = 20_000_000
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
@@ -62,32 +66,35 @@ class PredictionResult:
     inference_seconds: float
 
 
-def load_model(model_key):
-    """Load a trusted project checkpoint and return an eval-mode CPU model."""
+def model_checkpoint_path(model_key, project_dir=PROJECT_ROOT):
     if model_key not in MODEL_CONFIGS:
         raise ValueError(f"Unknown model: {model_key}")
+    return Path(project_dir) / MODEL_CONFIGS[model_key].checkpoint.relative_to(PROJECT_ROOT)
 
+
+def load_model(model_key, project_dir=PROJECT_ROOT):
+    """Load a trusted project checkpoint and return an eval-mode CPU model."""
+    checkpoint_path = model_checkpoint_path(model_key, project_dir)
     config = MODEL_CONFIGS[model_key]
-    if not config.checkpoint.is_file():
-        raise FileNotFoundError(
-            f"Checkpoint not found: {config.checkpoint}"
-        )
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    with checkpoint_path.open("rb") as checkpoint:
+        if model_key == "phase5_resnet18":
+            digest = hashlib.file_digest(checkpoint, "sha256").hexdigest()
+            if digest != PHASE5_CHECKPOINT_SHA256:
+                raise ValueError(
+                    f"Checkpoint SHA-256 does not match the evaluated Phase 5 model: "
+                    f"{checkpoint_path}"
+                )
+            checkpoint.seek(0)
+        state, _ = _load_state(checkpoint)
 
     if config.architecture == "resnet18_unet":
         model = ResNet18UNet(pretrained=False)
     else:
         model = UNet()
 
-    state, metadata = _load_state(config.checkpoint)
-    if config.key == "phase5_resnet18" and (
-        metadata.get("negative_bce_weight") != 1.1
-        or float(metadata.get("boundary_weight") or 0.0) != 0.0
-        or (metadata.get("sampling") or {}).get("strategy", "shuffle")
-        != "shuffle"
-    ):
-        raise ValueError(
-            "The ResNet checkpoint is not the selected Phase 5 model."
-        )
     model.load_state_dict(state)
     model.to(torch.device("cpu"))
     model.eval()

@@ -1,4 +1,7 @@
+import hashlib
 from io import BytesIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
@@ -13,6 +16,8 @@ from src.inference import (
     create_overlay_image,
     decode_uploaded_image,
     encode_png,
+    load_model,
+    model_checkpoint_path,
     preprocess_image,
     run_inference,
     summarize_mask,
@@ -41,6 +46,29 @@ class FixedProbabilityModel(nn.Module):
 
 
 class InferenceTests(unittest.TestCase):
+    def test_phase5_loader_checks_checkpoint_in_requested_project_dir(self):
+        with TemporaryDirectory() as project_dir:
+            checkpoint = model_checkpoint_path("phase5_resnet18", project_dir)
+            self.assertEqual(
+                checkpoint,
+                Path(project_dir) / "results" / "resnet18_unet_phase5_negw_best.pth",
+            )
+            checkpoint.parent.mkdir()
+            model = nn.Conv2d(3, 1, kernel_size=1)
+            torch.save(model.state_dict(), checkpoint)
+            with patch("src.inference._load_state") as deserialize:
+                with self.assertRaisesRegex(ValueError, "SHA-256"):
+                    load_model("phase5_resnet18", project_dir)
+                deserialize.assert_not_called()
+
+            digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+            with (
+                patch("src.inference.PHASE5_CHECKPOINT_SHA256", digest),
+                patch("src.inference.ResNet18UNet", return_value=model),
+            ):
+                self.assertIs(load_model("phase5_resnet18", project_dir), model)
+                self.assertFalse(model.training)
+
     def test_preprocessing_matches_rgb_resize_and_imagenet_normalization(self):
         image = Image.new("RGB", (320, 160), (255, 127, 0))
         tensor = preprocess_image(image)

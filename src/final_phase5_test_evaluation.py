@@ -1,6 +1,5 @@
 import argparse
 import csv
-import hashlib
 import json
 import time
 from pathlib import Path
@@ -14,7 +13,12 @@ from matplotlib import pyplot as plt
 
 from src.compare_models import IMAGE_MEAN, IMAGE_STD
 from src.dataset import get_dataloaders
-from src.inference import DEFAULT_THRESHOLD, MODEL_CONFIGS, load_model
+from src.inference import (
+    DEFAULT_THRESHOLD,
+    PHASE5_CHECKPOINT_SHA256,
+    load_model,
+    model_checkpoint_path,
+)
 from src.train import compute_detailed_metrics
 
 
@@ -291,8 +295,8 @@ def _recover_partial_outputs(project_dir, output_paths, batch_size):
             example[field] = int(example[field])
         examples.append(example)
 
-    checkpoint_path = MODEL_CONFIGS["phase5_resnet18"].checkpoint
-    model = load_model("phase5_resnet18")
+    checkpoint_path = model_checkpoint_path("phase5_resnet18", project_dir)
+    model = load_model("phase5_resnet18", project_dir)
     if next(model.parameters()).device.type != "cpu" or model.training:
         raise RuntimeError("The application model must load in CPU eval mode")
     _, _, test_loader = get_dataloaders(
@@ -341,7 +345,7 @@ def _recover_partial_outputs(project_dir, output_paths, batch_size):
     result = {
         "model": "Phase 5 ResNet-18 U-Net",
         "checkpoint": str(checkpoint_path.relative_to(project_dir)),
-        "checkpoint_sha256": hashlib.sha256(checkpoint_path.read_bytes()).hexdigest(),
+        "checkpoint_sha256": PHASE5_CHECKPOINT_SHA256,
         "threshold": DEFAULT_THRESHOLD,
         "threshold_source": "Fixed validation-selected Phase 5 threshold; no test tuning",
         "test_images": len(per_image),
@@ -383,12 +387,8 @@ def run_evaluation(project_dir, batch_size=8, num_threads=6):
             f"set again: {', '.join(str(path) for path in existing)}"
         )
 
-    checkpoint_path = MODEL_CONFIGS["phase5_resnet18"].checkpoint
-    if checkpoint_path.resolve() != (
-        project_dir / "results" / "resnet18_unet_phase5_negw_best.pth"
-    ).resolve():
-        raise RuntimeError("The app model path does not match the selected Phase 5 checkpoint")
-    model = load_model("phase5_resnet18")
+    checkpoint_path = model_checkpoint_path("phase5_resnet18", project_dir)
+    model = load_model("phase5_resnet18", project_dir)
     if next(model.parameters()).device.type != "cpu" or model.training:
         raise RuntimeError("The application model must load in CPU eval mode")
 
@@ -430,11 +430,10 @@ def run_evaluation(project_dir, batch_size=8, num_threads=6):
         }
         for row, label in examples
     ]
-    checkpoint_sha256 = hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
     result = {
         "model": "Phase 5 ResNet-18 U-Net",
         "checkpoint": str(checkpoint_path.relative_to(project_dir)),
-        "checkpoint_sha256": checkpoint_sha256,
+        "checkpoint_sha256": PHASE5_CHECKPOINT_SHA256,
         "threshold": DEFAULT_THRESHOLD,
         "threshold_source": "Fixed validation-selected Phase 5 threshold; no test tuning",
         "test_images": len(names),

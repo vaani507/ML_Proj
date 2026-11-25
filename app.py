@@ -16,6 +16,7 @@ from src.inference import (
     encode_png,
     load_model,
     mask_at_threshold,
+    model_checkpoint_path,
     run_inference,
     summarize_mask,
 )
@@ -210,7 +211,7 @@ def main():
     st.write(
         "Upload an electroluminescence (EL) image to generate a binary defect "
         "mask, an overlay, and a pixel-wise probability heatmap. Inference "
-        "runs locally on CPU using the selected Phase 5 checkpoint."
+        "runs on CPU using the selected Phase 5 checkpoint."
     )
     st.info(
         "This application localizes patterns learned from labeled masks. "
@@ -224,15 +225,12 @@ def main():
         st.caption(
             "Validation-selected threshold: 0.165. Model weights stay on CPU."
         )
-        compare_custom = st.checkbox(
-            "Also compare with the original Custom U-Net",
-            value=False,
-            help=(
-                "Loads the legacy Custom U-Net checkpoint and runs a second "
-                "CPU inference. It uses its own validation-selected threshold "
-                "of 0.525."
-            ),
-        )
+        compare_custom = False
+        if model_checkpoint_path("custom_unet").is_file():
+            compare_custom = st.checkbox(
+                "Also compare with the original Custom U-Net",
+                help="Runs a second CPU inference at its validation-selected threshold of 0.525.",
+            )
         st.divider()
         st.caption(
             "The historical test-set metrics are documented in README.md; "
@@ -253,14 +251,12 @@ def main():
         for label, (file_name, _) in DEMO_IMAGES.items()
         if (_demo_directory() / file_name).is_file()
     ]
-    demo_choice = st.selectbox(
-        "Or load a validation-set demonstration image",
-        ["Choose a demo image", *available_demos],
-        help=(
-            "These examples include small and difficult defects; they are "
-            "demonstrations, not evaluation metrics."
-        ),
-    )
+    demo_choice = "Choose a demo image"
+    if available_demos:
+        demo_choice = st.selectbox(
+            "Or load a validation-set demonstration image",
+            [demo_choice, *available_demos],
+        )
 
     try:
         image_bytes, file_name, demo_description = _source_image(

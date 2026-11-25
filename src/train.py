@@ -240,7 +240,7 @@ def train_unet(
         checkpoint_path = (
             Path(__file__).resolve().parents[1]
             / "results"
-            / "unet_solar_defect.pth"
+            / "unet_solar_defect_retrained.pth"
         )
     checkpoint_path = Path(checkpoint_path)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)

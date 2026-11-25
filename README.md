@@ -49,10 +49,10 @@ python -m streamlit run app.py
 Streamlit prints the local URL (normally `http://localhost:8501`) after
 startup. Press `Ctrl+C` in the terminal to stop it.
 
-The trained checkpoints and dataset are intentionally excluded from Git. The
-default ResNet checkpoint must be present at
-`results/resnet18_unet_phase5_negw_best.pth`. For the optional comparison,
-`results/unet_solar_defect.pth` must also be present. Upload-only inference
+The original Phase 5 ResNet checkpoint is bundled at
+`results/resnet18_unet_phase5_negw_best.pth`. The dataset and historical
+Custom U-Net checkpoint are supplied locally. The comparison appears when
+`results/unet_solar_defect.pth` is present. Upload-only inference
 does not require the dataset; the demo selector requires the processed images
 under `data/processed/SolarCells/train/images`.
 
@@ -61,6 +61,13 @@ Run the focused automated tests with:
 ```powershell
 python -m unittest discover -s tests -v
 ```
+
+### Streamlit Community Cloud
+
+In [Streamlit Community Cloud](https://share.streamlit.io/), create an app
+from `vaani507/ML_Proj`, branch `main`, and entry point `app.py`. Choose
+Python 3.12 in Advanced settings. The app installs CPU-only PyTorch on Linux
+and supports image uploads using the bundled Phase 5 checkpoint.
 
 ## Dataset and preprocessing
 
@@ -71,7 +78,10 @@ snapshot contains 134 training pairs and 56 test pairs. The training split is
 divided deterministically into 107 train and 27 validation images using seed
 42. The held-out test split is kept separate.
 
-Preprocessing corrects EXIF orientation, converts images to RGB, resizes
+Preprocessing checks that each image and mask share the same stored pixel
+dimensions. Masks must be authored on the source image's unrotated pixel grid.
+The image's EXIF orientation is applied to both files, and conflicting EXIF
+orientation tags are rejected. Preprocessing converts images to RGB, resizes
 images to **224 × 224** with bilinear interpolation, and resizes masks with
 nearest-neighbor interpolation before binarizing them. Model inputs use
 ImageNet normalization: means `[0.485, 0.456, 0.406]` and standard deviations
@@ -114,25 +124,29 @@ continued training to a 50-epoch ceiling also did not replace Phase 5:
 continued training improved overall validation Dice but regressed the tiny
 image group. Those experimental checkpoints remain separate.
 
-If you have the dataset but not the saved Phase 5 checkpoint, you can train a
-compatible ResNet-18 U-Net checkpoint after preprocessing:
+### Model architecture
+
+![Phase 5 ResNet-18 U-Net architecture](docs/figures/phase12_model_architecture.png)
+
+To train a separate ResNet-18 U-Net candidate, run the following after
+preprocessing:
 
 ```powershell
-python -m src.train_resnet_unet --epochs 8 --batch-size 8 --num-threads 6 --negative-bce-weight 1.1 --output-prefix results/resnet18_unet_phase5_negw
+python -m src.train_resnet_unet --epochs 8 --batch-size 8 --num-threads 6 --negative-bce-weight 1.1 --output-prefix results/resnet18_unet_retrained
 ```
 
-The command saves the best model as
-`results/resnet18_unet_phase5_negw_best.pth`, the filename expected by the app.
-It may download the pretrained ResNet-18 encoder weights on the first run, so
-internet access is needed unless those weights are already cached. A newly
-trained checkpoint is not the original evaluated checkpoint and will not
-reproduce the test metrics reported below.
+The command saves the best candidate as
+`results/resnet18_unet_retrained_best.pth`. It may download the pretrained
+ResNet-18 encoder weights on the first run. Use validation data to calibrate a
+new checkpoint's threshold. The app and final evaluator require the original
+Phase 5 checkpoint for the reported results. Running `python main.py` trains a
+Custom U-Net and writes its weights to `results/unet_solar_defect_retrained.pth`.
 
 The selected checkpoint is frozen at
 `results/resnet18_unet_phase5_negw_best.pth` (SHA-256
 `518a4de1485a8828f6bbeea89da19bafe5db86ae65054e5dbc6cadbbab4a8cd8`).
 On Windows it is marked read-only. The app's `load_model("phase5_resnet18")`
-checks the Phase 5 training metadata, loads the weights on CPU, and enters
+verifies the SHA-256, loads the weights on CPU, and enters
 evaluation mode. The finalization smoke test used this app loader and an
 in-memory PNG; inference returned a correctly aligned mask and probability
 map at the original 320 × 240 image dimensions with threshold 0.165.
@@ -144,6 +158,7 @@ set at the fixed validation-selected threshold **0.165**. No threshold tuning
 or model selection was performed on the test data. The final fixed-threshold
 pass reproduced the previously recorded Phase 5 results:
 
+
 | Metric | Test-set result |
 |---|---:|
 | Dice / F1 | 0.7569 |
@@ -154,6 +169,50 @@ pass reproduced the previously recorded Phase 5 results:
 | False-positive pixels | 33,417 |
 | False-negative pixels | 34,878 |
 | Micro Dice | 0.8128 |
+
+### Final test-set graphs
+
+![Phase 5 test metrics](docs/figures/phase12_test_metrics.png)
+
+![Phase 5 pixel confusion matrix](docs/figures/phase12_test_confusion_matrix.png)
+
+The confusion matrix reports pixel-level results across all 56 test images:
+148,295 true positives, 33,417 false positives, 34,878 false negatives,
+and 2,593,266 true negatives. This is an actual-pixel matrix, not an
+image-classification matrix.
+
+### Model comparison
+
+![Held-out test model comparison](docs/figures/phase12_model_comparison_test.png)
+
+The comparison uses the historical held-out test records documented in this
+repository. Phase 5 remains the selected model. These bars are descriptive
+comparisons and should not be interpreted as repeated-seed confidence results.
+
+### Additional test-set visualizations
+
+These plots show how aggregate scores vary across individual images and defect
+sizes. They are descriptive summaries of the saved, fixed-threshold test
+predictions; they were not used to tune the model.
+
+![Distribution of per-image Dice across the test set](docs/figures/phase12_test_per_image_dice_distribution.png)
+
+![Per-image Dice versus ground-truth defect size](docs/figures/phase12_test_dice_vs_defect_size.png)
+
+![False-positive and false-negative pixels in the images with the most errors](docs/figures/phase12_test_largest_error_images.png)
+
+The test prediction contact sheet is also useful for a presentation because
+it pairs selected successful and difficult examples with their ground truth:
+
+![Test image prediction examples](docs/figures/phase12_final_test_examples.png)
+
+### Training history (experimental continuation)
+
+The chart below documents the Phase 5 continuation experiment, not the
+selected Phase 5 checkpoint. The continuation was not adopted because its
+overall validation Dice gain came with lower tiny-defect Dice.
+
+![Extended-training validation and learning-rate history](docs/figures/phase11_extended_training_curves.png)
 
 These are dataset evaluation metrics, **not an accuracy score for an uploaded
 image**. The app has no ground truth for user uploads and therefore displays
@@ -177,9 +236,65 @@ python -m src.final_phase5_test_evaluation --batch-size 8 --num-threads 6
 ```
 
 The script refuses to overwrite existing final outputs or repeat the full
-test evaluation. The Phase 5 checkpoint remains read-only.
+test evaluation when those outputs are present. To use a separate project
+directory, pass `--project-dir` with the original checkpoint and processed
+dataset under that directory.
+
+## Phase 13: Native-resolution patch experiment
+
+The raw training and validation images are 448 × 448, while the established
+pipeline resizes them to 224 × 224. A short patch-based experiment tested
+whether training on native 224 × 224 tiles could preserve small crack details.
+It started from the Phase 5 checkpoint, kept the ResNet-18 encoder frozen, and
+changed only the training input sampling. The Phase 5 BCE+Dice objective,
+augmentation, deterministic 107/27 training/validation split, batch size 8,
+and six CPU threads were retained. One tile per training image was rotated
+across epochs to keep the CPU training-step count near the original run.
+
+The best checkpoint was epoch 7 of 8. Thresholds were selected on the
+validation set only. Both models were scored against the original 448 × 448
+validation masks; the Phase 5 model's 224 × 224 probabilities were resized to
+that grid before scoring.
+
+| Validation model / threshold | Dice | IoU | Precision | Recall | Tiny-image Dice | FP pixels | FN pixels |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Phase 5 / locked 0.165 | 0.8077 | 0.6857 | 0.8044 | 0.8288 | 0.8103 | 82,605 | 66,144 |
+| Phase 5 / validation-selected 0.245 | 0.8100 | 0.6895 | 0.8387 | 0.8010 | 0.8048 | 64,757 | 77,282 |
+| Patch / locked 0.165 | 0.7646 | 0.6338 | 0.7663 | 0.8087 | 0.6256 | 95,757 | 75,784 |
+| Patch / validation-selected 0.210 | 0.7651 | 0.6355 | 0.7799 | 0.7955 | 0.6204 | 86,648 | 81,562 |
+
+At their independently selected validation thresholds, the patch model's mean
+per-image Dice was 0.0448 lower (6 wins, 21 losses across 27 images; paired
+bootstrap 95% interval for the mean difference: -0.0908 to -0.0088). Tiny-image
+Dice was 0.1844 lower. The patch model therefore did **not** improve this
+short-run result and is not the application default.
+
+Training took 211.2 seconds; validation across the eight epochs took 118.0
+seconds. On the same validation images, timed CPU prediction averaged 0.255
+seconds/image for Phase 5 and 0.369 seconds/image for tiled inference. This
+timing includes image loading and preprocessing, and the patch path was about
+1.45× slower in this measurement. No test-set evaluation was performed. The
+Phase 5 checkpoint SHA-256 remained unchanged.
+
+![Phase 5 and native-patch validation examples, including TP/FP/FN overlays](docs/figures/resnet18_unet_phase13_patch_validation_examples.png)
+
+The experiment is reproducible with:
+
+```powershell
+python -m src.phase13_patch_training --epochs 8 --batch-size 8 --num-threads 6
+```
+
+The script writes separate experimental checkpoints and validation artifacts
+under `results/resnet18_unet_phase13_patch_*`. To finish report generation from
+an existing run without retraining, use `--finalize-existing`. Further work
+should test architecture alternatives or carefully reviewed hard examples as
+separate experiments; this patch run does not justify changing the selected
+model.
 
 ## Limitations and future work
+
+- All 56 test images contain annotated defects. Pixel-level precision therefore
+  does not measure how often the app would flag a defect-free solar cell.
 
 - The model predicts the binary defect patterns represented in its training
   masks; it does not identify defect categories.
@@ -193,8 +308,8 @@ test evaluation. The Phase 5 checkpoint remains read-only.
   model metrics.
 - The reported evaluation comes from one split and one selected run; further
   multi-seed and external-data validation would be needed before deployment.
-- The default checkpoint and local dataset are not included in the repository;
-  they must be supplied at the documented paths.
+- The dataset and the optional Custom U-Net checkpoint must be supplied
+  locally to enable validation demos and model comparison.
 
 Potential future work includes multi-seed validation, broader external-data
 testing, better grid-line discrimination, and physical calibration if

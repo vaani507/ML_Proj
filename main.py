@@ -27,7 +27,7 @@ if __name__ == "__main__":
         val_loader,
         epochs=15,
         device=device,
-        checkpoint_path=output_dir / "unet_solar_defect.pth",
+        checkpoint_path=output_dir / "unet_solar_defect_retrained.pth",
     )
     evaluate_and_visualize(
         model,

@@ -25,7 +25,7 @@ AUGMENTATION_SUFFIX = re.compile(
     re.IGNORECASE,
 )
 
-REPORT_DIR.mkdir(parents=True, exist_ok=True)
+EXIF_ORIENTATION = 274
 
 
 def canonical_stem(path, is_label=False):
@@ -103,36 +103,42 @@ def find_split_overlaps():
     return overlaps
 
 
+def load_aligned_pair(image_path, mask_path):
+    """Read a mask authored on the image's stored pixel grid."""
+    with Image.open(image_path) as image, Image.open(mask_path) as mask:
+        if image.size != mask.size:
+            raise ValueError(
+                f"Image and mask dimensions differ for {image_path}: "
+                f"{image.size} versus {mask.size}"
+            )
+
+        image_orientation = image.getexif().get(EXIF_ORIENTATION, 1)
+        mask_exif = mask.getexif()
+        if mask_exif.get(EXIF_ORIENTATION, image_orientation) != image_orientation:
+            raise ValueError(f"Conflicting EXIF orientations for {image_path} and {mask_path}")
+        mask_exif[EXIF_ORIENTATION] = image_orientation
+        return (
+            ImageOps.exif_transpose(image).convert("RGB"),
+            ImageOps.exif_transpose(mask).convert("L"),
+        )
+
+
 def preprocess_pair(image_path, mask_path, split):
+    image, mask = load_aligned_pair(image_path, mask_path)
+    original_image_size = image.size
+    original_mask_size = mask.size
     image_out = OUT_DIR / split / "images" / f"{image_path.stem}.png"
     mask_out = OUT_DIR / split / "masks" / f"{image_path.stem}.png"
 
     image_out.parent.mkdir(parents=True, exist_ok=True)
     mask_out.parent.mkdir(parents=True, exist_ok=True)
 
-    # Process the EL image.
-    with Image.open(image_path) as image:
-        image = ImageOps.exif_transpose(image).convert("RGB")
-        original_image_size = image.size
-        image = image.resize(
-            IMAGE_SIZE,
-            Image.Resampling.BILINEAR
-        )
-        image.save(image_out)
-
-    # Nearest-neighbor preserves mask labels while resizing.
-    with Image.open(mask_path) as mask:
-        original_mask_size = mask.size
-        mask = mask.convert("L")
-        mask = mask.resize(
-            IMAGE_SIZE,
-            Image.Resampling.NEAREST
-        )
-        mask_array = np.asarray(mask)
-        binary_mask = (mask_array > MASK_THRESHOLD).astype(np.uint8)
-        Image.fromarray(binary_mask).save(mask_out)
-
-        mask_values = np.unique(binary_mask)
+    image = image.resize(IMAGE_SIZE, Image.Resampling.BILINEAR)
+    mask = mask.resize(IMAGE_SIZE, Image.Resampling.NEAREST)
+    binary_mask = (np.asarray(mask) > MASK_THRESHOLD).astype(np.uint8)
+    image.save(image_out)
+    Image.fromarray(binary_mask).save(mask_out)
+    mask_values = np.unique(binary_mask)
 
     return {
         "split": split,
@@ -149,6 +155,7 @@ def preprocess_pair(image_path, mask_path, split):
 
 
 def process_split(split):
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
     image_dir = RAW_DIR / split / "defect"
     mask_dir = RAW_DIR / split / "label"
 

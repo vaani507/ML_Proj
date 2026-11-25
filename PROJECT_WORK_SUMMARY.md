@@ -84,8 +84,10 @@ connections. The final sigmoid produces per-pixel probabilities.
   with the highest validation Dice for that epoch. The threshold selected on
   the final epoch is returned to the evaluation step.
 
-The trained model state is saved to
-`results/unet_solar_defect.pth`. Training saves the final epoch's model state;
+New training runs save the model state to
+`results/unet_solar_defect_retrained.pth`. The historical checkpoint used by
+the app is stored separately at `results/unet_solar_defect.pth`.
+Training saves the final epoch's model state;
 it does not currently retain and restore a best-validation checkpoint.
 
 ### Test evaluation and visualization
@@ -1487,3 +1489,90 @@ outputs or repeat the full test evaluation.
 training phases, final test metrics, frozen checkpoint, example predictions,
 application launch, limitations, and future work. The app continues to use
 Phase 5 at threshold 0.165 by default; no checkpoint was modified or retrained.
+
+## Phase 13: Native-resolution patch-based training
+
+The raw `SolarCells` images are all 448 × 448 (134 train and 56 held-out test
+pairs). The existing preprocessing reduces inputs and masks to 224 × 224.
+In the deterministic seed-42 split, raw nearest-neighbor mask resizing reduced
+the foreground fraction in 59 of 107 training images; the mean raw-minus-resized
+fraction was 0.0039 (0.39 percentage points). Splitting each 448-pixel training
+image into four non-overlapping 224 × 224 tiles yielded 428 candidate crops:
+97 empty-mask tiles, 66 positive tiles with at most 2% foreground, and 265
+larger-defect tiles. Fifty-one of the 107 training images had at least one
+small-positive tile. These observations supported a cautious native-resolution
+patch experiment, but did not by themselves establish that patches would
+improve segmentation.
+
+### Controlled experiment
+
+`src/phase13_patch_training.py` starts from the frozen Phase 5 best weights
+(`results/resnet18_unet_phase5_negw_best.pth`, SHA-256
+`518a4de1485a8828f6bbeea89da19bafe5db86ae65054e5dbc6cadbbab4a8cd8`). The
+ResNet-18 encoder remained frozen and the decoder was optimized with AdamW at
+1e-3. Only the input sampling changed: one native 224 × 224 tile per training
+image per epoch, with a deterministic rotation across its four tiles. This
+preserved the existing BCE+Dice objective (negative/background weight 1.1),
+geometric and color augmentation, 107/27 split, batch size 8, and six CPU
+threads. The run used an 8-epoch initial budget, with validation each epoch and
+the existing patience-7 early-stopping rule; it completed all eight epochs.
+Epoch 7 was selected by validation Dice.
+
+For comparison, predictions from both models were scored against the original
+448 × 448 validation masks. Phase 5 inputs followed the established 448-to-224
+bilinear resize, and its output probabilities were upsampled to 448 × 448.
+Patch predictions were stitched from native-resolution 224 × 224 tiles.
+Threshold candidates were swept using validation data only, including the
+locked Phase 5 threshold 0.165. The validation threshold selected for Phase 5
+on this full-resolution comparison was 0.245; the patch model selected 0.210.
+The tiny-image group remains the existing definition (non-empty masks with at
+most 2% defect pixels), and contained five validation images.
+
+| Model / threshold | Dice | IoU | Precision | Recall | Tiny-image Dice | FP pixels | FN pixels |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Phase 5 / locked 0.165 | 0.8077 | 0.6857 | 0.8044 | 0.8288 | 0.8103 | 82,605 | 66,144 |
+| Phase 5 / validation-selected 0.245 | 0.8100 | 0.6895 | 0.8387 | 0.8010 | 0.8048 | 64,757 | 77,282 |
+| Patch / locked 0.165 | 0.7646 | 0.6338 | 0.7663 | 0.8087 | 0.6256 | 95,757 | 75,784 |
+| Patch / validation-selected 0.210 | 0.7651 | 0.6355 | 0.7799 | 0.7955 | 0.6204 | 86,648 | 81,562 |
+
+At their independently selected validation thresholds, patch-based mean
+per-image Dice was 0.0448 below Phase 5. Patch predictions won on 6 images and
+lost on 21; a paired bootstrap over the 27 image-level differences gave a
+95% interval of -0.0908 to -0.0088. Tiny-image Dice was 0.1844 lower. The patch
+run therefore did not show an improvement and did not justify changing the
+application model. No grid-specific suppression, architecture replacement, or
+hard-example mining was included in this single-variable experiment.
+
+The measured optimization time was 211.2 CPU seconds; validation across the
+eight epochs took 118.0 seconds. A separate timed pass through the same
+validation images averaged 0.255 seconds/image for Phase 5 and 0.369
+seconds/image for patch inference, about 1.45× slower. This timing includes
+image loading and preprocessing. The Phase 5 checkpoint hash was unchanged.
+The held-out test split was not opened or evaluated.
+
+Qualitative comparison (including missed and false-positive pixels):
+
+![Phase 5 and patch-based validation examples](docs/figures/resnet18_unet_phase13_patch_validation_examples.png)
+
+Saved artifacts:
+
+- `results/resnet18_unet_phase13_patch_best.pth` and
+  `results/resnet18_unet_phase13_patch_last.pth`
+- `results/resnet18_unet_phase13_patch_training_history.csv`
+- `results/resnet18_unet_phase13_patch_validation_summary.json`
+- `results/resnet18_unet_phase13_patch_validation_thresholds.csv`
+- `results/resnet18_unet_phase13_patch_validation_per_image.csv`
+- `results/resnet18_unet_phase13_patch_validation_probabilities.npz`
+- `results/resnet18_unet_phase13_patch_validation_examples.png`
+
+Reproduce the short experiment with:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.phase13_patch_training `
+  --epochs 8 --batch-size 8 --num-threads 6
+```
+
+Use `--finalize-existing` to regenerate the validation report and examples
+without retraining. Keep Phase 5 as the application default. A separate
+architecture comparison (for example U-Net++ or DeepLabV3+) or carefully
+reviewed hard-example training remains future work; neither was tested here.

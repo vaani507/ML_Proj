@@ -1,8 +1,11 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 matplotlib>=3.8
 numpy>=1.26,<3
 opencv-python-headless>=4.8
 pandas>=2.1
 Pillow>=10
 streamlit>=1.49,<2
-torch>=2.4
-torchvision>=0.19
+torch==2.10.0+cpu; sys_platform == "linux"
+torchvision==0.25.0+cpu; sys_platform == "linux"
+torch>=2.4; sys_platform != "linux"
+torchvision>=0.19; sys_platform != "linux"
